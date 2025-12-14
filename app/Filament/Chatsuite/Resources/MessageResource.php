@@ -81,13 +81,13 @@ class MessageResource extends Resource
                                     // ✅ Si el from ES el cliente → Cliente
                                     if ($msg->from === $record->from) {
                                         $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #f3f4f6; border-radius: 8px;">';
-                                        $html .= '<div style="font-weight: bold; color: #374151; margin-bottom: 5px;">👤 Cliente - ' . $fecha . '</div>';
+                                        $html .= '<div style="font-weight: bold; color: #374151; margin-bottom: 5px;">👤 Admin ChatSuite - ' . $fecha . '</div>';
                                         $html .= '<div style="color: #1f2937;">' . nl2br(e($msg->message)) . '</div>';
                                         $html .= '</div>';
                                     } else {
                                         // ✅ Si NO es el cliente → Humano (mensaje enviado desde panel / Twilio)
                                         $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #dcfce7; border-radius: 8px;">';
-                                        $html .= '<div style="font-weight: bold; color: #166534; margin-bottom: 5px;">🧑 Humano - ' . $fecha . '</div>';
+                                        $html .= '<div style="font-weight: bold; color: #166534; margin-bottom: 5px;">📲 Usuario - ' . $fecha . '</div>';
                                         $html .= '<div style="color: #14532d;">' . nl2br(e($msg->message)) . '</div>';
                                         $html .= '</div>';
                                     }
