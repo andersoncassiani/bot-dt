@@ -13,9 +13,12 @@ use Filament\Tables\Table;
 use Filament\Infolists\Infolist;
 use Filament\Infolists\Components\Section;
 use Filament\Infolists\Components\TextEntry;
-use Filament\Infolists\Components\RepeatableEntry;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Database\Eloquent\Builder;
+
+// ✅ NUEVO (solo lo necesario)
+use Illuminate\Support\Facades\Http;
+use Filament\Notifications\Notification;
 
 class MessageResource extends Resource
 {
@@ -62,7 +65,11 @@ class MessageResource extends Resource
                         TextEntry::make('conversaciones')
                             ->label('')
                             ->state(function ($record) {
-                                $mensajes = Message::where('from', $record->from)
+                                // ✅ Traer conversación en ambos sentidos (cliente<->twilio)
+                                $mensajes = Message::where(function ($q) use ($record) {
+                                    $q->where('from', $record->from)
+                                      ->orWhere('to', $record->from);
+                                })
                                     ->orderBy('timestamp', 'asc')
                                     ->get();
                                 
@@ -71,16 +78,24 @@ class MessageResource extends Resource
                                 foreach ($mensajes as $msg) {
                                     $fecha = $msg->timestamp ? $msg->timestamp->format('d/m/Y H:i') : 'Sin fecha';
                                     
-                                    // Mensaje del cliente
-                                    $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #f3f4f6; border-radius: 8px;">';
-                                    $html .= '<div style="font-weight: bold; color: #374151; margin-bottom: 5px;">👤 Cliente - ' . $fecha . '</div>';
-                                    $html .= '<div style="color: #1f2937;">' . nl2br(e($msg->message)) . '</div>';
-                                    $html .= '</div>';
-                                    
-                                    // Respuesta del bot
+                                    // ✅ Si el from ES el cliente → Cliente
+                                    if ($msg->from === $record->from) {
+                                        $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #f3f4f6; border-radius: 8px;">';
+                                        $html .= '<div style="font-weight: bold; color: #374151; margin-bottom: 5px;">👤 Cliente - ' . $fecha . '</div>';
+                                        $html .= '<div style="color: #1f2937;">' . nl2br(e($msg->message)) . '</div>';
+                                        $html .= '</div>';
+                                    } else {
+                                        // ✅ Si NO es el cliente → Humano (mensaje enviado desde panel / Twilio)
+                                        $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #dcfce7; border-radius: 8px;">';
+                                        $html .= '<div style="font-weight: bold; color: #166534; margin-bottom: 5px;">🧑 Humano - ' . $fecha . '</div>';
+                                        $html .= '<div style="color: #14532d;">' . nl2br(e($msg->message)) . '</div>';
+                                        $html .= '</div>';
+                                    }
+
+                                    // Respuesta del bot (si existe)
                                     if ($msg->response) {
                                         $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #dbeafe; border-radius: 8px;">';
-                                        $html .= '<div style="font-weight: bold; color: #1e40af; margin-bottom: 5px;">🤖 Cata</div>';
+                                        $html .= '<div style="font-weight: bold; color: #1e40af; margin-bottom: 5px;">🤖 Lia</div>';
                                         $html .= '<div style="color: #1e3a8a;">' . nl2br(e($msg->response)) . '</div>';
                                         $html .= '</div>';
                                     }
@@ -249,6 +264,88 @@ Tables\Columns\TextColumn::make('timestamp')
                     ->icon('heroicon-o-chat-bubble-left-ellipsis')
                     ->modalHeading(fn ($record) => 'Conversación con ' . $record->from)
                     ->modalWidth('3xl'),
+
+                // ✅ NUEVO: Responder → Laravel llama a Express (NO Twilio directo)
+                Tables\Actions\Action::make('responder')
+                    ->label('Responder')
+                    ->icon('heroicon-o-paper-airplane')
+                    ->modalHeading(fn ($record) => 'Responder a ' . $record->from)
+                    ->modalWidth('lg')
+                    ->form([
+                        Forms\Components\Textarea::make('human_reply')
+                            ->label('Mensaje')
+                            ->placeholder('Escribe tu mensaje…')
+                            ->rows(4)
+                            ->required(),
+                    ])
+                    ->modalSubmitActionLabel('Enviar')
+                    ->action(function (array $data, $record) {
+
+                        $text = trim($data['human_reply'] ?? '');
+                        if ($text === '') {
+                            Notification::make()->title('Mensaje vacío')->danger()->send();
+                            return;
+                        }
+
+                        // ✅ Normaliza destino a whatsapp:+...
+                        $toUser = trim((string) $record->from);
+                        if (!str_starts_with($toUser, 'whatsapp:')) {
+                            $toUser = 'whatsapp:+' . ltrim($toUser, '+');
+                        }
+
+                        // ✅ From (Twilio sender) desde .env Laravel (obligatorio para tu Express actual)
+                        $fromTwilio = (string) env('TWILIO_WHATSAPP_FROM', '');
+                        if ($fromTwilio === '' || !str_starts_with($fromTwilio, 'whatsapp:')) {
+                            Notification::make()
+                                ->title('TWILIO_WHATSAPP_FROM inválido en .env')
+                                ->body('Debe ser tipo whatsapp:+1415XXXXXXX')
+                                ->danger()
+                                ->send();
+                            return;
+                        }
+
+                        $expressBase = rtrim((string) env('EXPRESS_BASE_URL', ''), '/');
+                        $panelKey = (string) env('PANEL_API_KEY', '');
+
+                        if ($expressBase === '' || $panelKey === '') {
+                            Notification::make()
+                                ->title('Falta EXPRESS_BASE_URL o PANEL_API_KEY en .env')
+                                ->danger()
+                                ->send();
+                            return;
+                        }
+
+                        try {
+                            $resp = Http::withToken($panelKey)
+                                ->timeout(20)
+                                ->post($expressBase . '/handoff/send', [
+                                    'from' => $fromTwilio,
+                                    'to'   => $toUser,
+                                    'text' => $text,
+                                ]);
+
+                            if (!$resp->successful()) {
+                                Notification::make()
+                                    ->title('Express respondió error')
+                                    ->body($resp->body())
+                                    ->danger()
+                                    ->send();
+                                return;
+                            }
+
+                            Notification::make()
+                                ->title('Mensaje enviado ✅ (guardado + IA pausada)')
+                                ->success()
+                                ->send();
+                        } catch (\Throwable $e) {
+                            Notification::make()
+                                ->title('No se pudo conectar a Express')
+                                ->body($e->getMessage())
+                                ->danger()
+                                ->send();
+                            return;
+                        }
+                    }),
             ])
             ->defaultSort('timestamp', 'desc');
     }

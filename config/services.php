@@ -35,4 +35,14 @@ return [
         ],
     ],
 
+    'bot' => [
+    'handoff_url' => env('BOT_HANDOFF_URL'),
+    'panel_key' => env('BOT_PANEL_KEY'),
+],
+
+'twilio' => [
+    'handoff_template_sid' => env('TWILIO_HANDOFF_TEMPLATE_SID'),
+],
+
+
 ];
