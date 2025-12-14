@@ -129,7 +129,7 @@ class MessageResource extends Resource
                                 // ==========================
                                 if ($msgFrom === $contact) {
                                     $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #f3f4f6; border-radius: 8px;">';
-                                    $html .= '<div style="font-weight: bold; color: #374151; margin-bottom: 5px;">👤 Usuario (' . e($contact) . ') - ' . $fecha . '</div>';
+                                    $html .= '<div style="font-weight: bold; color: #374151; margin-bottom: 5px;">📲 Usuario (' . e($contact) . ') - ' . $fecha . '</div>';
                                     $html .= '<div style="color: #1f2937;">' . nl2br(e($msg->message)) . '</div>';
                                     $html .= '</div>';
                                 } else {
@@ -144,7 +144,7 @@ class MessageResource extends Resource
 
                                     if ($isAdminOutbound) {
                                         $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #dcfce7; border-radius: 8px;">';
-                                        $html .= '<div style="font-weight: bold; color: #166534; margin-bottom: 5px;">🧑 Admin ChatSuite - ' . $fecha . '</div>';
+                                        $html .= '<div style="font-weight: bold; color: #166534; margin-bottom: 5px;">👤 Admin ChatSuite - ' . $fecha . '</div>';
                                         $html .= '<div style="color: #14532d;">' . nl2br(e($msg->message)) . '</div>';
                                         $html .= '</div>';
                                     } else {
