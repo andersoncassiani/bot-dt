@@ -340,52 +340,73 @@ class MessageResource extends Resource
                             ->rows(4)
                             ->required(),
                     ])
-                    ->modalSubmitActionLabel('Enviar')
-                    ->action(function (array $data, $record) {
-                        $text = trim($data['human_reply'] ?? '');
-                        if ($text === '') {
-                            Notification::make()->title('Mensaje vacío')->danger()->send();
-                            return;
-                        }
-
-                        $contact = self::getContactPhone($record);
-
-                        // ✅ Express (recomendado): Laravel -> Express -> Twilio + pausa IA
-                        $expressBase = rtrim(env('EXPRESS_BASE_URL', ''), '/');
-                        $panelKey = env('PANEL_API_KEY');
-
-                        if (!$expressBase || !$panelKey) {
-                            Notification::make()
-                                ->title('Falta EXPRESS_BASE_URL o PANEL_API_KEY en .env')
-                                ->danger()
-                                ->send();
-                            return;
-                        }
-
-                        $resp = Http::withToken($panelKey)->post($expressBase . '/handoff/send', [
-                            'to'   => $contact,
-                            'text' => $text,
-                            // opcional: pausa custom desde panel
-                            'pauseMinutes' => (int) (env('HUMAN_PAUSE_MINUTES', 60)),
-                        ]);
-
-                        if (!$resp->successful()) {
-                            Notification::make()
-                                ->title('Express respondió error')
-                                ->body($resp->body())
-                                ->danger()
-                                ->send();
-                            return;
-                        }
-
-                        Notification::make()
-                            ->title('Mensaje enviado ✅ (guardado + IA pausada)')
-                            ->success()
-                            ->send();
-                    }),
-            ])
-            ->defaultSort('timestamp', 'desc');
+                   ->modalSubmitActionLabel('Enviar')
+->action(function (array $data, $record) {
+    $text = trim($data['human_reply'] ?? '');
+    if ($text === '') {
+        Notification::make()->title('Mensaje vacío')->danger()->send();
+        return;
     }
+
+    $contact = self::getContactPhone($record);
+
+    // ✅ Express (recomendado): Laravel -> Express -> Twilio + pausa IA
+    $expressBase = rtrim(env('EXPRESS_BASE_URL', ''), '/');
+    $panelKey = env('PANEL_API_KEY');
+
+    if (!$expressBase || !$panelKey) {
+        Notification::make()
+            ->title('Falta EXPRESS_BASE_URL o PANEL_API_KEY en .env')
+            ->danger()
+            ->send();
+        return;
+    }
+
+    // ✅ FROM requerido por Express
+    // Preferido: TWILIO_WHATSAPP_FROM="whatsapp:+1415..."
+    // Fallback: TWILIO_WHATSAPP_NUMBER="1415..."
+    $from = trim((string) env('TWILIO_WHATSAPP_FROM', ''));
+    if ($from === '') {
+        $num = trim((string) env('TWILIO_WHATSAPP_NUMBER', ''));
+        if ($num !== '') {
+            $from = 'whatsapp:+' . ltrim($num, '+');
+        }
+    }
+
+    if ($from === '') {
+        Notification::make()
+            ->title('Falta TWILIO_WHATSAPP_FROM o TWILIO_WHATSAPP_NUMBER en .env')
+            ->danger()
+            ->send();
+        return;
+    }
+
+    $resp = Http::withToken($panelKey)
+        ->asJson()
+        ->post($expressBase . '/handoff/send', [
+            'from' => $from,        // ✅ CLAVE (antes faltaba)
+            'to'   => $contact,
+            'text' => $text,
+            'pauseMinutes' => (int) env('HUMAN_PAUSE_MINUTES', 60),
+        ]);
+
+    if (!$resp->successful()) {
+        Notification::make()
+            ->title('Express respondió error')
+            ->body($resp->body())
+            ->danger()
+            ->send();
+        return;
+    }
+
+    Notification::make()
+        ->title('Mensaje enviado ✅ (guardado + IA pausada)')
+        ->success()
+        ->send();
+}),
+])
+->defaultSort('timestamp', 'desc');
+}
 
     public static function getRelations(): array
     {
