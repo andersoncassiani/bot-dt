@@ -44,5 +44,18 @@ return [
     'handoff_template_sid' => env('TWILIO_HANDOFF_TEMPLATE_SID'),
 ],
 
+    'express' => [
+  'base_url' => env('EXPRESS_BASE_URL'),
+],
 
+'panel' => [
+  'api_key' => env('PANEL_API_KEY'),
+],
+
+'twilio' => [
+  'whatsapp_from' => env('TWILIO_WHATSAPP_FROM'),
+  'handoff_template_sid' => env('TWILIO_HANDOFF_TEMPLATE_SID'),
+],
+
+    
 ];
