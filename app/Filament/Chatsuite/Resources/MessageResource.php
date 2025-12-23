@@ -47,8 +47,6 @@ class MessageResource extends Resource
 
         $v = ltrim($v, '+');
 
-        // Si viene sin código país, aquí NO lo inventamos (lo dejas como tengas tu data)
-        // pero si normalmente guardas 57..., esto lo convierte a whatsapp:+57...
         return 'whatsapp:+' . $v;
     }
 
@@ -72,6 +70,140 @@ class MessageResource extends Resource
 
         // Si no, el contacto real es "from"
         return $recordFrom;
+    }
+
+    /**
+     * ✅ Render de adjuntos (audio/sticker/image/file) desde mediaJson
+     * + Render de estado de transcripción (pending/error)
+     * - Si Twilio MediaUrl no carga directo en browser por auth, al menos queda evidenciado + link.
+     * - Si luego montas un proxy (Laravel/Express), aquí solo cambias $src a tu proxy.
+     */
+    private static function renderMediaHtml($msg): string
+    {
+        $numMedia = (int) ($msg->numMedia ?? 0);
+        $mediaJson = $msg->mediaJson ?? null;
+
+        if ($numMedia <= 0 || empty($mediaJson)) {
+            // Aunque no haya media, si por alguna razón hay transcript/estado, lo mostramos
+            $status = strtolower((string) ($msg->transcriptStatus ?? ''));
+            if (!empty($msg->transcript)) {
+                return self::renderTranscriptBlock($msg->transcript);
+            }
+            if ($status === 'pending') {
+                return self::renderTranscriptPendingBlock();
+            }
+            if ($status === 'error') {
+                return self::renderTranscriptErrorBlock();
+            }
+            return '';
+        }
+
+        $items = json_decode($mediaJson, true);
+        if (!is_array($items) || empty($items)) {
+            $status = strtolower((string) ($msg->transcriptStatus ?? ''));
+            if (!empty($msg->transcript)) {
+                return self::renderTranscriptBlock($msg->transcript);
+            }
+            if ($status === 'pending') {
+                return self::renderTranscriptPendingBlock();
+            }
+            if ($status === 'error') {
+                return self::renderTranscriptErrorBlock();
+            }
+            return '';
+        }
+
+        $type = strtolower((string) ($msg->messageType ?? ''));
+
+        // ✅ Si tienes un proxy, puedes setearlo en .env:
+        // MEDIA_PROXY_BASE_URL=https://tu-dominio.com/twilio/media
+        // y construir src hacia ese proxy (más abajo).
+        $proxyBase = rtrim((string) env('MEDIA_PROXY_BASE_URL', ''), '/');
+
+        $html = '<div style="margin-top:10px;">';
+
+        foreach ($items as $i => $m) {
+            $url = (string) ($m['url'] ?? '');
+            if ($url === '') continue;
+
+            $ct = strtolower((string) ($m['contentType'] ?? ''));
+            $labelCt = $ct !== '' ? $ct : 'media';
+
+            // Si hay proxy, mandamos por proxy con query (?url=...)
+            $src = $url;
+            if ($proxyBase !== '') {
+                $src = $proxyBase . '?url=' . urlencode($url);
+            }
+
+            // Detectar tipo real por ContentType aunque messageType venga vacío
+            $isAudio = str_starts_with($ct, 'audio/');
+            $isWebp  = ($ct === 'image/webp');
+            $isImage = str_starts_with($ct, 'image/');
+
+            $badge = '';
+            if ($isAudio || $type === 'audio') $badge = '🎤 Nota de voz';
+            elseif ($isWebp || $type === 'sticker') $badge = '🧩 Sticker';
+            elseif ($isImage || $type === 'image') $badge = '🖼️ Imagen';
+            else $badge = '📎 Archivo';
+
+            $html .= '<div style="margin-top:8px; padding:10px; background:#ffffff; border:1px solid #e5e7eb; border-radius:10px;">';
+            $html .= '<div style="font-weight:600; color:#111827; margin-bottom:6px;">' . e($badge) . '</div>';
+
+            if ($isAudio || $type === 'audio') {
+                $html .= '<audio controls preload="none" style="width: 280px;">';
+                $html .= '<source src="' . e($src) . '" type="' . e($ct ?: 'audio/ogg') . '">';
+                $html .= 'Tu navegador no soporta audio.';
+                $html .= '</audio>';
+                $html .= '<div style="margin-top:6px;"><a href="' . e($src) . '" target="_blank" style="color:#2563eb;">Abrir audio</a> <span style="color:#6b7280;">(' . e($labelCt) . ')</span></div>';
+
+                // ✅ Estado de transcripción (si aplica)
+                $status = strtolower((string) ($msg->transcriptStatus ?? ''));
+                if (empty($msg->transcript) && $status === 'pending') {
+                    $html .= self::renderTranscriptPendingBlock();
+                }
+                if ($status === 'error') {
+                    $html .= self::renderTranscriptErrorBlock();
+                }
+            } elseif ($isWebp || $isImage || $type === 'sticker' || $type === 'image') {
+                $html .= '<a href="' . e($src) . '" target="_blank">';
+                $html .= '<img src="' . e($src) . '" style="max-width:220px; border-radius:10px; border:1px solid #e5e7eb;" />';
+                $html .= '</a>';
+                $html .= '<div style="margin-top:6px;"><a href="' . e($src) . '" target="_blank" style="color:#2563eb;">Abrir imagen</a> <span style="color:#6b7280;">(' . e($labelCt) . ')</span></div>';
+            } else {
+                $html .= '<a href="' . e($src) . '" target="_blank" style="color:#2563eb;">Descargar / ver adjunto</a>';
+                $html .= '<div style="margin-top:4px; color:#6b7280;">' . e($labelCt) . '</div>';
+            }
+
+            // ✅ Transcripción (si ya existe)
+            if (!empty($msg->transcript)) {
+                $html .= self::renderTranscriptBlock($msg->transcript);
+            }
+
+            $html .= '</div>';
+        }
+
+        $html .= '</div>';
+
+        return $html;
+    }
+
+    private static function renderTranscriptBlock(string $text): string
+    {
+        $html  = '<div style="margin-top:10px; padding:10px; background:#f9fafb; border-radius:10px; color:#111827;">';
+        $html .= '<div style="font-weight:600; margin-bottom:6px;">📝 Transcripción</div>';
+        $html .= '<div style="white-space:pre-wrap;">' . e($text) . '</div>';
+        $html .= '</div>';
+        return $html;
+    }
+
+    private static function renderTranscriptPendingBlock(): string
+    {
+        return '<div style="margin-top:10px; padding:10px; background:#eff6ff; border-radius:10px; color:#1e3a8a;">📝 Transcribiendo nota de voz...</div>';
+    }
+
+    private static function renderTranscriptErrorBlock(): string
+    {
+        return '<div style="margin-top:10px; padding:10px; background:#fef2f2; border-radius:10px; color:#991b1b;">❌ No se pudo transcribir la nota de voz.</div>';
     }
 
     public static function infolist(Infolist $infolist): Infolist
@@ -124,13 +256,30 @@ class MessageResource extends Resource
                                 $msgFrom = self::normalizeWhatsapp((string) $msg->from);
                                 $msgTo   = self::normalizeWhatsapp((string) ($msg->to ?? ''));
 
+                                // Render adjuntos (si hay)
+                                $mediaHtml = self::renderMediaHtml($msg);
+
                                 // ==========================
                                 // ✅ 1) MENSAJE DEL USUARIO
                                 // ==========================
                                 if ($msgFrom === $contact) {
                                     $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #f3f4f6; border-radius: 8px;">';
                                     $html .= '<div style="font-weight: bold; color: #374151; margin-bottom: 5px;">📲 Usuario (' . e($contact) . ') - ' . $fecha . '</div>';
-                                    $html .= '<div style="color: #1f2937;">' . nl2br(e($msg->message)) . '</div>';
+
+                                    // Si message viene vacío (caso media), mostramos fallback
+                                    $text = trim((string) ($msg->message ?? ''));
+                                    if ($text === '') {
+                                        $text = match (strtolower((string) ($msg->messageType ?? ''))) {
+                                            'audio' => '[NOTA_DE_VOZ]',
+                                            'sticker' => '[STICKER]',
+                                            'image' => '[IMAGEN]',
+                                            'file' => '[ARCHIVO]',
+                                            default => '[MENSAJE]',
+                                        };
+                                    }
+
+                                    $html .= '<div style="color: #1f2937;">' . nl2br(e($text)) . '</div>';
+                                    $html .= $mediaHtml;
                                     $html .= '</div>';
                                 } else {
                                     // ==========================
@@ -146,12 +295,14 @@ class MessageResource extends Resource
                                         $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #dcfce7; border-radius: 8px;">';
                                         $html .= '<div style="font-weight: bold; color: #166534; margin-bottom: 5px;">👤 Admin ChatSuite - ' . $fecha . '</div>';
                                         $html .= '<div style="color: #14532d;">' . nl2br(e($msg->message)) . '</div>';
+                                        $html .= $mediaHtml;
                                         $html .= '</div>';
                                     } else {
                                         // Si cae aquí, lo mostramos neutro (por si hay data vieja/inconsistente)
                                         $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #fff7ed; border-radius: 8px;">';
                                         $html .= '<div style="font-weight: bold; color: #9a3412; margin-bottom: 5px;">⚠️ Sistema - ' . $fecha . '</div>';
                                         $html .= '<div style="color: #7c2d12;">' . nl2br(e($msg->message)) . '</div>';
+                                        $html .= $mediaHtml;
                                         $html .= '</div>';
                                     }
                                 }
@@ -340,73 +491,71 @@ class MessageResource extends Resource
                             ->rows(4)
                             ->required(),
                     ])
-                   ->modalSubmitActionLabel('Enviar')
-->action(function (array $data, $record) {
-    $text = trim($data['human_reply'] ?? '');
-    if ($text === '') {
-        Notification::make()->title('Mensaje vacío')->danger()->send();
-        return;
+                    ->modalSubmitActionLabel('Enviar')
+                    ->action(function (array $data, $record) {
+                        $text = trim($data['human_reply'] ?? '');
+                        if ($text === '') {
+                            Notification::make()->title('Mensaje vacío')->danger()->send();
+                            return;
+                        }
+
+                        $contact = self::getContactPhone($record);
+
+                        // ✅ Express (recomendado): Laravel -> Express -> Twilio + pausa IA
+                        $expressBase = rtrim(env('EXPRESS_BASE_URL', ''), '/');
+                        $panelKey = env('PANEL_API_KEY');
+
+                        if (!$expressBase || !$panelKey) {
+                            Notification::make()
+                                ->title('Falta EXPRESS_BASE_URL o PANEL_API_KEY en .env')
+                                ->danger()
+                                ->send();
+                            return;
+                        }
+
+                        // ✅ FROM requerido por Express
+                        $from = trim((string) env('TWILIO_WHATSAPP_FROM', ''));
+                        if ($from === '') {
+                            $num = trim((string) env('TWILIO_WHATSAPP_NUMBER', ''));
+                            if ($num !== '') {
+                                $from = 'whatsapp:+' . ltrim($num, '+');
+                            }
+                        }
+
+                        if ($from === '') {
+                            Notification::make()
+                                ->title('Falta TWILIO_WHATSAPP_FROM o TWILIO_WHATSAPP_NUMBER en .env')
+                                ->danger()
+                                ->send();
+                            return;
+                        }
+
+                        $resp = Http::withToken($panelKey)
+                            ->asJson()
+                            ->post($expressBase . '/handoff/send', [
+                                'from' => $from,
+                                'to'   => $contact,
+                                'text' => $text,
+                                'pauseMinutes' => (int) env('HUMAN_PAUSE_MINUTES', 60),
+                            ]);
+
+                        if (!$resp->successful()) {
+                            Notification::make()
+                                ->title('Express respondió error')
+                                ->body($resp->body())
+                                ->danger()
+                                ->send();
+                            return;
+                        }
+
+                        Notification::make()
+                            ->title('Mensaje enviado ✅ (guardado + IA pausada)')
+                            ->success()
+                            ->send();
+                    }),
+            ])
+            ->defaultSort('timestamp', 'desc');
     }
-
-    $contact = self::getContactPhone($record);
-
-    // ✅ Express (recomendado): Laravel -> Express -> Twilio + pausa IA
-    $expressBase = rtrim(env('EXPRESS_BASE_URL', ''), '/');
-    $panelKey = env('PANEL_API_KEY');
-
-    if (!$expressBase || !$panelKey) {
-        Notification::make()
-            ->title('Falta EXPRESS_BASE_URL o PANEL_API_KEY en .env')
-            ->danger()
-            ->send();
-        return;
-    }
-
-    // ✅ FROM requerido por Express
-    // Preferido: TWILIO_WHATSAPP_FROM="whatsapp:+1415..."
-    // Fallback: TWILIO_WHATSAPP_NUMBER="1415..."
-    $from = trim((string) env('TWILIO_WHATSAPP_FROM', ''));
-    if ($from === '') {
-        $num = trim((string) env('TWILIO_WHATSAPP_NUMBER', ''));
-        if ($num !== '') {
-            $from = 'whatsapp:+' . ltrim($num, '+');
-        }
-    }
-
-    if ($from === '') {
-        Notification::make()
-            ->title('Falta TWILIO_WHATSAPP_FROM o TWILIO_WHATSAPP_NUMBER en .env')
-            ->danger()
-            ->send();
-        return;
-    }
-
-    $resp = Http::withToken($panelKey)
-        ->asJson()
-        ->post($expressBase . '/handoff/send', [
-            'from' => $from,        // ✅ CLAVE (antes faltaba)
-            'to'   => $contact,
-            'text' => $text,
-            'pauseMinutes' => (int) env('HUMAN_PAUSE_MINUTES', 60),
-        ]);
-
-    if (!$resp->successful()) {
-        Notification::make()
-            ->title('Express respondió error')
-            ->body($resp->body())
-            ->danger()
-            ->send();
-        return;
-    }
-
-    Notification::make()
-        ->title('Mensaje enviado ✅ (guardado + IA pausada)')
-        ->success()
-        ->send();
-}),
-])
-->defaultSort('timestamp', 'desc');
-}
 
     public static function getRelations(): array
     {
