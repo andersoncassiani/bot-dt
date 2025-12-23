@@ -73,6 +73,39 @@ class MessageResource extends Resource
     }
 
     /**
+     * ✅ NUEVO: Texto "principal" para mostrar en UI:
+     * - si es audio y ya hay transcript -> mostrar transcript (no [NOTA_DE_VOZ])
+     * - si no, mostrar message o fallback por tipo
+     */
+    private static function getDisplayText($msg): string
+    {
+        $type = strtolower((string) ($msg->messageType ?? ''));
+        $message = trim((string) ($msg->message ?? ''));
+
+        if ($type === 'audio') {
+            $transcript = trim((string) ($msg->transcript ?? ''));
+            if ($transcript !== '') {
+                return $transcript;
+            }
+
+            $status = strtolower((string) ($msg->transcriptStatus ?? ''));
+            if ($status === 'pending') return '📝 Transcribiendo nota de voz...';
+            if ($status === 'error') return '❌ No se pudo transcribir la nota de voz.';
+
+            return $message !== '' ? $message : '[NOTA_DE_VOZ]';
+        }
+
+        if ($message !== '') return $message;
+
+        return match ($type) {
+            'sticker' => '[STICKER]',
+            'image'   => '[IMAGEN]',
+            'file'    => '[ARCHIVO]',
+            default   => '[MENSAJE]',
+        };
+    }
+
+    /**
      * ✅ Render de adjuntos (audio/sticker/image/file) desde mediaJson
      * + Render de estado de transcripción (pending/error)
      * - Si Twilio MediaUrl no carga directo en browser por auth, al menos queda evidenciado + link.
@@ -266,17 +299,8 @@ class MessageResource extends Resource
                                     $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #f3f4f6; border-radius: 8px;">';
                                     $html .= '<div style="font-weight: bold; color: #374151; margin-bottom: 5px;">📲 Usuario (' . e($contact) . ') - ' . $fecha . '</div>';
 
-                                    // Si message viene vacío (caso media), mostramos fallback
-                                    $text = trim((string) ($msg->message ?? ''));
-                                    if ($text === '') {
-                                        $text = match (strtolower((string) ($msg->messageType ?? ''))) {
-                                            'audio' => '[NOTA_DE_VOZ]',
-                                            'sticker' => '[STICKER]',
-                                            'image' => '[IMAGEN]',
-                                            'file' => '[ARCHIVO]',
-                                            default => '[MENSAJE]',
-                                        };
-                                    }
+                                    // ✅ NUEVO: texto principal (si es audio y ya hay transcript, muestra transcript)
+                                    $text = self::getDisplayText($msg);
 
                                     $html .= '<div style="color: #1f2937;">' . nl2br(e($text)) . '</div>';
                                     $html .= $mediaHtml;
@@ -350,11 +374,16 @@ class MessageResource extends Resource
                     ->icon('heroicon-o-user')
                     ->description(fn ($record) => Message::where('from', $record->from)->count() . ' mensajes'),
 
+                // ✅ NUEVO: si es audio y hay transcript, mostrar transcript aquí también
                 Tables\Columns\TextColumn::make('message')
                     ->label('Ultimo mensaje')
+                    ->state(function ($record) {
+                        return self::getDisplayText($record);
+                    })
                     ->limit(80)
                     ->searchable(query: function (Builder $query, string $search): Builder {
-                        return $query->where('messages.message', 'like', "%{$search}%");
+                        return $query->where('messages.message', 'like', "%{$search}%")
+                                     ->orWhere('messages.transcript', 'like', "%{$search}%");
                     })
                     ->wrap(),
 
