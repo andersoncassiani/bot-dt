@@ -15,11 +15,13 @@ use Filament\Infolists\Components\TextEntry;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Database\Eloquent\Builder;
 
-// ✅ NUEVO (solo lo necesario)
+// ✅ ya lo usabas
 use Illuminate\Support\Facades\Http;
+
+// ✅ NUEVO: notificaciones para feedback
 use Filament\Notifications\Notification;
 
-// ✅ NUEVO: Twilio SDK para enviar difusión (sin controlador extra)
+// ✅ NUEVO: Twilio SDK (difusión sin controlador extra)
 use Twilio\Rest\Client as TwilioClient;
 
 class MessageResource extends Resource
@@ -32,8 +34,8 @@ class MessageResource extends Resource
     protected static ?string $pluralModelLabel = 'Mensajes del Bot';
     protected static ?int $navigationSort = 1;
 
-    // ✅ NUEVO: Template SID fijo (tu plantilla)
-    private const DIFFUSION_TEMPLATE_SID = 'HX69922ddf40433cb71b4e0b8820cd0316';
+    // ✅ NUEVO: tu plantilla (Content SID)
+    private const DIFFUSION_TEMPLATE_SID = 'HXba8ab559e42f01599e6661ef49d32a98';
 
     public static function form(Form $form): Form
     {
@@ -41,7 +43,7 @@ class MessageResource extends Resource
     }
 
     /**
-     * ✅ Helper: normaliza whatsapp:+57...
+     * ✅ Helper: normaliza whatsapp:+...
      */
     private static function normalizeWhatsapp(string $value): string
     {
@@ -72,26 +74,28 @@ class MessageResource extends Resource
         $v = preg_replace('/\s+/', '', $v);
         $v = str_replace(['-','(',')'], '', $v);
 
+        // Si viene whatsapp:+...
         if (str_starts_with($v, 'whatsapp:')) {
-            // Asegurar whatsapp:+...
             $raw = str_replace('whatsapp:', '', $v);
             $raw = trim($raw);
+
             if (str_starts_with($raw, '+')) return 'whatsapp:' . $raw;
             if (preg_match('/^\d+$/', $raw)) return 'whatsapp:+' . $raw;
+
             return null;
         }
 
-        // +E.164
+        // Si ya es +E.164
         if (str_starts_with($v, '+')) {
             return 'whatsapp:' . $v;
         }
 
-        // 57XXXXXXXXXX -> +57XXXXXXXXXX
+        // Si viene 57XXXXXXXXXX
         if (preg_match('/^57\d{10}$/', $v)) {
             return 'whatsapp:+' . $v;
         }
 
-        // 10 dígitos Colombia (300xxxxxxx)
+        // Colombia típico: 10 dígitos
         if (preg_match('/^\d{10}$/', $v)) {
             return 'whatsapp:+57' . $v;
         }
@@ -106,13 +110,12 @@ class MessageResource extends Resource
     {
         $twilioFrom = trim((string) env('TWILIO_WHATSAPP_FROM', ''));
 
-        // Normalizamos para comparar bien
         $recordFrom = self::normalizeWhatsapp((string) $record->from);
         $recordTo   = self::normalizeWhatsapp((string) ($record->to ?? ''));
 
         $twilioFromNorm = $twilioFrom ? self::normalizeWhatsapp($twilioFrom) : '';
 
-        // Si el último mensaje (record) lo envió el BOT/ADMIN, el contacto real es "to"
+        // Si el último mensaje lo envió el BOT/ADMIN, el contacto real es "to"
         if ($twilioFromNorm && $recordFrom === $twilioFromNorm && $recordTo) {
             return $recordTo;
         }
@@ -123,7 +126,7 @@ class MessageResource extends Resource
 
     /**
      * ✅ NUEVO: Texto "principal" para mostrar en UI:
-     * - si es audio y ya hay transcript -> mostrar transcript (no [NOTA_DE_VOZ])
+     * - si es audio y ya hay transcript -> mostrar transcript
      * - si no, mostrar message o fallback por tipo
      */
     private static function getDisplayText($msg): string
@@ -155,10 +158,7 @@ class MessageResource extends Resource
     }
 
     /**
-     * ✅ Render de adjuntos (audio/sticker/image/file) desde mediaJson
-     * + Render de estado de transcripción (pending/error)
-     * - Si Twilio MediaUrl no carga directo en browser por auth, al menos queda evidenciado + link.
-     * - Si luego montas un proxy (Laravel/Express), aquí solo cambias $src a tu proxy.
+     * ✅ Render de adjuntos desde mediaJson
      */
     private static function renderMediaHtml($msg): string
     {
@@ -166,7 +166,6 @@ class MessageResource extends Resource
         $mediaJson = $msg->mediaJson ?? null;
 
         if ($numMedia <= 0 || empty($mediaJson)) {
-            // Aunque no haya media, si por alguna razón hay transcript/estado, lo mostramos
             $status = strtolower((string) ($msg->transcriptStatus ?? ''));
             if (!empty($msg->transcript)) {
                 return self::renderTranscriptBlock($msg->transcript);
@@ -197,9 +196,7 @@ class MessageResource extends Resource
 
         $type = strtolower((string) ($msg->messageType ?? ''));
 
-        // ✅ Si tienes un proxy, puedes setearlo en .env:
-        // MEDIA_PROXY_BASE_URL=https://tu-dominio.com/twilio/media
-        // y construir src hacia ese proxy (más abajo).
+        // ✅ Si tienes un proxy:
         $proxyBase = rtrim((string) env('MEDIA_PROXY_BASE_URL', ''), '/');
 
         $html = '<div style="margin-top:10px;">';
@@ -211,13 +208,11 @@ class MessageResource extends Resource
             $ct = strtolower((string) ($m['contentType'] ?? ''));
             $labelCt = $ct !== '' ? $ct : 'media';
 
-            // Si hay proxy, mandamos por proxy con query (?url=...)
             $src = $url;
             if ($proxyBase !== '') {
                 $src = $proxyBase . '?url=' . urlencode($url);
             }
 
-            // Detectar tipo real por ContentType aunque messageType venga vacío
             $isAudio = str_starts_with($ct, 'audio/');
             $isWebp  = ($ct === 'image/webp');
             $isImage = str_starts_with($ct, 'image/');
@@ -238,7 +233,6 @@ class MessageResource extends Resource
                 $html .= '</audio>';
                 $html .= '<div style="margin-top:6px;"><a href="' . e($src) . '" target="_blank" style="color:#2563eb;">Abrir audio</a> <span style="color:#6b7280;">(' . e($labelCt) . ')</span></div>';
 
-                // ✅ Estado de transcripción (si aplica)
                 $status = strtolower((string) ($msg->transcriptStatus ?? ''));
                 if (empty($msg->transcript) && $status === 'pending') {
                     $html .= self::renderTranscriptPendingBlock();
@@ -256,7 +250,6 @@ class MessageResource extends Resource
                 $html .= '<div style="margin-top:4px; color:#6b7280;">' . e($labelCt) . '</div>';
             }
 
-            // ✅ Transcripción (si ya existe)
             if (!empty($msg->transcript)) {
                 $html .= self::renderTranscriptBlock($msg->transcript);
             }
@@ -322,7 +315,6 @@ class MessageResource extends Resource
 
                             $contact = self::getContactPhone($record);
 
-                            // ✅ Conversación en ambos sentidos (usuario <-> bot/admin)
                             $mensajes = Message::where(function ($q) use ($contact) {
                                 $q->where('from', $contact)
                                   ->orWhere('to', $contact);
@@ -338,31 +330,25 @@ class MessageResource extends Resource
                                 $msgFrom = self::normalizeWhatsapp((string) $msg->from);
                                 $msgTo   = self::normalizeWhatsapp((string) ($msg->to ?? ''));
 
-                                // Render adjuntos (si hay)
                                 $mediaHtml = self::renderMediaHtml($msg);
 
-                                // ==========================
                                 // ✅ 1) MENSAJE DEL USUARIO
-                                // ==========================
                                 if ($msgFrom === $contact) {
                                     $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #f3f4f6; border-radius: 8px;">';
                                     $html .= '<div style="font-weight: bold; color: #374151; margin-bottom: 5px;">📲 Usuario (' . e($contact) . ') - ' . $fecha . '</div>';
 
-                                    // ✅ NUEVO: texto principal (si es audio y ya hay transcript, muestra transcript)
                                     $text = self::getDisplayText($msg);
 
                                     $html .= '<div style="color: #1f2937;">' . nl2br(e($text)) . '</div>';
                                     $html .= $mediaHtml;
                                     $html .= '</div>';
                                 } else {
-                                    // ==========================
                                     // ✅ 2) MENSAJE DEL ADMIN (outbound humano)
-                                    // ==========================
                                     $isAdminOutbound =
                                         $twilioFrom &&
                                         $msgFrom === $twilioFrom &&
                                         $msgTo === $contact &&
-                                        empty($msg->response); // outbound humano se guarda como fila con response null
+                                        empty($msg->response);
 
                                     if ($isAdminOutbound) {
                                         $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #dcfce7; border-radius: 8px;">';
@@ -371,7 +357,6 @@ class MessageResource extends Resource
                                         $html .= $mediaHtml;
                                         $html .= '</div>';
                                     } else {
-                                        // Si cae aquí, lo mostramos neutro (por si hay data vieja/inconsistente)
                                         $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #fff7ed; border-radius: 8px;">';
                                         $html .= '<div style="font-weight: bold; color: #9a3412; margin-bottom: 5px;">⚠️ Sistema - ' . $fecha . '</div>';
                                         $html .= '<div style="color: #7c2d12;">' . nl2br(e($msg->message)) . '</div>';
@@ -380,9 +365,7 @@ class MessageResource extends Resource
                                     }
                                 }
 
-                                // ==========================
-                                // ✅ 3) RESPUESTA DEL BOT (Lia)
-                                // ==========================
+                                // ✅ 3) RESPUESTA DEL BOT
                                 if (!empty($msg->response)) {
                                     $html .= '<div style="margin-bottom: 20px; padding: 12px; background-color: #dbeafe; border-radius: 8px;">';
                                     $html .= '<div style="font-weight: bold; color: #1e40af; margin-bottom: 5px;">🤖 Lia</div>';
@@ -423,7 +406,6 @@ class MessageResource extends Resource
                     ->icon('heroicon-o-user')
                     ->description(fn ($record) => Message::where('from', $record->from)->count() . ' mensajes'),
 
-                // ✅ NUEVO: si es audio y hay transcript, mostrar transcript aquí también
                 Tables\Columns\TextColumn::make('message')
                     ->label('Ultimo mensaje')
                     ->state(function ($record) {
@@ -545,12 +527,12 @@ class MessageResource extends Resource
                     }),
             ])
 
-            // ✅ NUEVO: BOTÓN SUPERIOR "Difución" (header actions)
+            // ✅ NUEVO: BOTÓN SUPERIOR "Difusión" (sin controladores extra)
             ->headerActions([
-                Tables\Actions\Action::make('difucion')
-                    ->label('Difución')
+                Tables\Actions\Action::make('difusion')
+                    ->label('Difusión')
                     ->icon('heroicon-o-megaphone')
-                    ->modalHeading('Enviar difución (WhatsApp Template)')
+                    ->modalHeading('Enviar difusión (WhatsApp Template)')
                     ->modalWidth('2xl')
                     ->form([
                         Forms\Components\Textarea::make('numbers')
@@ -571,6 +553,7 @@ class MessageResource extends Resource
                             ->content(function ($get) {
                                 $raw = (string) ($get('numbers') ?? '');
                                 $parts = preg_split("/\r\n|\n|\r|,|;/", $raw) ?: [];
+
                                 $nums = collect($parts)
                                     ->map(fn ($n) => self::normalizeWhatsappPhone((string) $n))
                                     ->filter()
@@ -590,9 +573,8 @@ class MessageResource extends Resource
                                     ($nums->count() > 30 ? "\n... (+".($nums->count()-30)." más)" : '');
                             }),
                     ])
-                    ->modalSubmitActionLabel('Enviar difución')
+                    ->modalSubmitActionLabel('Enviar difusión')
                     ->action(function (array $data) {
-                        // Validaciones env
                         $sid = trim((string) env('TWILIO_ACCOUNT_SID', ''));
                         $token = trim((string) env('TWILIO_AUTH_TOKEN', ''));
                         $from = trim((string) env('TWILIO_WHATSAPP_FROM', ''));
@@ -606,7 +588,6 @@ class MessageResource extends Resource
                             return;
                         }
 
-                        // Parse números
                         $raw = (string) ($data['numbers'] ?? '');
                         $parts = preg_split("/\r\n|\n|\r|,|;/", $raw) ?: [];
                         $numbers = collect($parts)
@@ -623,7 +604,6 @@ class MessageResource extends Resource
                             return;
                         }
 
-                        // Variables
                         $varsRaw = (string) ($data['vars_json'] ?? '{}');
                         $vars = json_decode($varsRaw, true);
                         if (!is_array($vars)) {
@@ -666,7 +646,7 @@ class MessageResource extends Resource
                         }
 
                         Notification::make()
-                            ->title("Difución enviada: {$ok} OK / {$fail} fallos")
+                            ->title("Difusión enviada: {$ok} OK / {$fail} fallos")
                             ->body(implode("\n", array_slice($lines, 0, 15)) . (count($lines) > 15 ? "\n..." : ''))
                             ->success()
                             ->send();
@@ -708,7 +688,6 @@ class MessageResource extends Resource
 
                         $contact = self::getContactPhone($record);
 
-                        // ✅ Express (recomendado): Laravel -> Express -> Twilio + pausa IA
                         $expressBase = rtrim(env('EXPRESS_BASE_URL', ''), '/');
                         $panelKey = env('PANEL_API_KEY');
 
@@ -720,7 +699,6 @@ class MessageResource extends Resource
                             return;
                         }
 
-                        // ✅ FROM requerido por Express
                         $from = trim((string) env('TWILIO_WHATSAPP_FROM', ''));
                         if ($from === '') {
                             $num = trim((string) env('TWILIO_WHATSAPP_NUMBER', ''));
