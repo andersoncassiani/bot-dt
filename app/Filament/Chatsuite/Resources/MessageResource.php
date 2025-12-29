@@ -15,13 +15,10 @@ use Filament\Infolists\Components\TextEntry;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Database\Eloquent\Builder;
 
-// ✅ ya lo usabas
 use Illuminate\Support\Facades\Http;
 
-// ✅ NUEVO: notificaciones para feedback
 use Filament\Notifications\Notification;
 
-// ✅ NUEVO: Twilio SDK (difusión sin controlador extra)
 use Twilio\Rest\Client as TwilioClient;
 
 class MessageResource extends Resource
@@ -34,7 +31,7 @@ class MessageResource extends Resource
     protected static ?string $pluralModelLabel = 'Mensajes del Bot';
     protected static ?int $navigationSort = 1;
 
-    // ✅ NUEVO: tu plantilla (Content SID)
+    // ✅ Tu plantilla (Content SID) para difusión
     private const DIFFUSION_TEMPLATE_SID = 'HXba8ab559e42f01599e6661ef49d32a98';
 
     public static function form(Form $form): Form
@@ -59,7 +56,7 @@ class MessageResource extends Resource
     }
 
     /**
-     * ✅ NUEVO: normaliza número a E.164 y lo devuelve como whatsapp:+...
+     * ✅ Normaliza número a E.164 y lo devuelve como whatsapp:+...
      * Acepta:
      * - whatsapp:+57...
      * - +57...
@@ -125,7 +122,7 @@ class MessageResource extends Resource
     }
 
     /**
-     * ✅ NUEVO: Texto "principal" para mostrar en UI:
+     * ✅ Texto "principal" para mostrar en UI:
      * - si es audio y ya hay transcript -> mostrar transcript
      * - si no, mostrar message o fallback por tipo
      */
@@ -317,7 +314,7 @@ class MessageResource extends Resource
 
                             $mensajes = Message::where(function ($q) use ($contact) {
                                 $q->where('from', $contact)
-                                  ->orWhere('to', $contact);
+                                    ->orWhere('to', $contact);
                             })
                                 ->orderBy('timestamp', 'asc')
                                 ->get();
@@ -414,7 +411,7 @@ class MessageResource extends Resource
                     ->limit(80)
                     ->searchable(query: function (Builder $query, string $search): Builder {
                         return $query->where('messages.message', 'like', "%{$search}%")
-                                     ->orWhere('messages.transcript', 'like', "%{$search}%");
+                            ->orWhere('messages.transcript', 'like', "%{$search}%");
                     })
                     ->wrap(),
 
@@ -527,7 +524,7 @@ class MessageResource extends Resource
                     }),
             ])
 
-            // ✅ NUEVO: BOTÓN SUPERIOR "Difusión" (sin controladores extra)
+            // ✅ BOTÓN SUPERIOR "Difusión" (solo números; NO contentVariables)
             ->headerActions([
                 Tables\Actions\Action::make('difusion')
                     ->label('Difusión')
@@ -538,14 +535,7 @@ class MessageResource extends Resource
                         Forms\Components\Textarea::make('numbers')
                             ->label('Números destino')
                             ->helperText('Uno por línea o separados por coma. Acepta: +57..., 300xxxxxxx, whatsapp:+57...')
-                            ->rows(6)
-                            ->required(),
-
-                        Forms\Components\Textarea::make('vars_json')
-                            ->label('Variables (JSON) para el template')
-                            ->helperText('Ej: {"1":"BHK","2":"50% OFF"} — si no usas variables, deja {}')
-                            ->rows(4)
-                            ->default('{}')
+                            ->rows(7)
                             ->required(),
 
                         Forms\Components\Placeholder::make('preview')
@@ -560,15 +550,10 @@ class MessageResource extends Resource
                                     ->unique()
                                     ->values();
 
-                                $varsRaw = (string) ($get('vars_json') ?? '{}');
-                                $vars = json_decode($varsRaw, true);
-                                if (!is_array($vars)) $vars = [];
-
                                 return
                                     'Template: ' . self::DIFFUSION_TEMPLATE_SID . "\n" .
                                     'From: ' . (string) env('TWILIO_WHATSAPP_FROM', '') . "\n" .
                                     'Total destinatarios válidos: ' . $nums->count() . "\n\n" .
-                                    'Variables:' . "\n" . json_encode($vars, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n\n" .
                                     'Destinatarios:' . "\n" . $nums->take(30)->implode("\n") .
                                     ($nums->count() > 30 ? "\n... (+".($nums->count()-30)." más)" : '');
                             }),
@@ -599,17 +584,7 @@ class MessageResource extends Resource
                         if ($numbers->isEmpty()) {
                             Notification::make()
                                 ->title('No hay números válidos')
-                                ->danger()
-                                ->send();
-                            return;
-                        }
-
-                        $varsRaw = (string) ($data['vars_json'] ?? '{}');
-                        $vars = json_decode($varsRaw, true);
-                        if (!is_array($vars)) {
-                            Notification::make()
-                                ->title('JSON inválido en variables')
-                                ->body('Corrige el JSON. Ej: {"1":"BHK","2":"50% OFF"}')
+                                ->body('Pega números tipo +573001112233 o 3001112233 (se convierte a +57).')
                                 ->danger()
                                 ->send();
                             return;
@@ -625,10 +600,10 @@ class MessageResource extends Resource
 
                         foreach ($numbers as $to) {
                             try {
+                                // ✅ Payload SIN contentVariables (evita el 400)
                                 $payload = [
                                     'from' => self::normalizeWhatsapp($from),
                                     'contentSid' => self::DIFFUSION_TEMPLATE_SID,
-                                    'contentVariables' => json_encode($vars, JSON_UNESCAPED_UNICODE),
                                 ];
 
                                 if ($statusCallback !== '') {
