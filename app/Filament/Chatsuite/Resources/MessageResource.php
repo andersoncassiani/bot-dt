@@ -32,7 +32,7 @@ class MessageResource extends Resource
     protected static ?int $navigationSort = 1;
 
     // ✅ Tu plantilla (Content SID) para difusión
-    private const DIFFUSION_TEMPLATE_SID = 'HXba8ab559e42f01599e6661ef49d32a98';
+    private const DIFFUSION_TEMPLATE_SID = 'HX69922ddf40433cb71b4e0b8820cd0316';
 
     public static function form(Form $form): Form
     {
