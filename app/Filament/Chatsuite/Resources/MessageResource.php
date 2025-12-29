@@ -19,6 +19,9 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Http;
 use Filament\Notifications\Notification;
 
+// ✅ NUEVO: Twilio SDK para enviar difusión (sin controlador extra)
+use Twilio\Rest\Client as TwilioClient;
+
 class MessageResource extends Resource
 {
     protected static ?string $model = Message::class;
@@ -28,6 +31,9 @@ class MessageResource extends Resource
     protected static ?string $modelLabel = 'Mensaje';
     protected static ?string $pluralModelLabel = 'Mensajes del Bot';
     protected static ?int $navigationSort = 1;
+
+    // ✅ NUEVO: Template SID fijo (tu plantilla)
+    private const DIFFUSION_TEMPLATE_SID = 'HXba8ab559e42f01599e6661ef49d32a98';
 
     public static function form(Form $form): Form
     {
@@ -48,6 +54,49 @@ class MessageResource extends Resource
         $v = ltrim($v, '+');
 
         return 'whatsapp:+' . $v;
+    }
+
+    /**
+     * ✅ NUEVO: normaliza número a E.164 y lo devuelve como whatsapp:+...
+     * Acepta:
+     * - whatsapp:+57...
+     * - +57...
+     * - 57XXXXXXXXXX
+     * - 300XXXXXXXX (asume Colombia +57)
+     */
+    private static function normalizeWhatsappPhone(string $value): ?string
+    {
+        $v = trim((string) $value);
+        if ($v === '') return null;
+
+        $v = preg_replace('/\s+/', '', $v);
+        $v = str_replace(['-','(',')'], '', $v);
+
+        if (str_starts_with($v, 'whatsapp:')) {
+            // Asegurar whatsapp:+...
+            $raw = str_replace('whatsapp:', '', $v);
+            $raw = trim($raw);
+            if (str_starts_with($raw, '+')) return 'whatsapp:' . $raw;
+            if (preg_match('/^\d+$/', $raw)) return 'whatsapp:+' . $raw;
+            return null;
+        }
+
+        // +E.164
+        if (str_starts_with($v, '+')) {
+            return 'whatsapp:' . $v;
+        }
+
+        // 57XXXXXXXXXX -> +57XXXXXXXXXX
+        if (preg_match('/^57\d{10}$/', $v)) {
+            return 'whatsapp:+' . $v;
+        }
+
+        // 10 dígitos Colombia (300xxxxxxx)
+        if (preg_match('/^\d{10}$/', $v)) {
+            return 'whatsapp:+57' . $v;
+        }
+
+        return null;
     }
 
     /**
@@ -495,6 +544,135 @@ class MessageResource extends Resource
                         }
                     }),
             ])
+
+            // ✅ NUEVO: BOTÓN SUPERIOR "Difución" (header actions)
+            ->headerActions([
+                Tables\Actions\Action::make('difucion')
+                    ->label('Difución')
+                    ->icon('heroicon-o-megaphone')
+                    ->modalHeading('Enviar difución (WhatsApp Template)')
+                    ->modalWidth('2xl')
+                    ->form([
+                        Forms\Components\Textarea::make('numbers')
+                            ->label('Números destino')
+                            ->helperText('Uno por línea o separados por coma. Acepta: +57..., 300xxxxxxx, whatsapp:+57...')
+                            ->rows(6)
+                            ->required(),
+
+                        Forms\Components\Textarea::make('vars_json')
+                            ->label('Variables (JSON) para el template')
+                            ->helperText('Ej: {"1":"BHK","2":"50% OFF"} — si no usas variables, deja {}')
+                            ->rows(4)
+                            ->default('{}')
+                            ->required(),
+
+                        Forms\Components\Placeholder::make('preview')
+                            ->label('Preview (resumen)')
+                            ->content(function ($get) {
+                                $raw = (string) ($get('numbers') ?? '');
+                                $parts = preg_split("/\r\n|\n|\r|,|;/", $raw) ?: [];
+                                $nums = collect($parts)
+                                    ->map(fn ($n) => self::normalizeWhatsappPhone((string) $n))
+                                    ->filter()
+                                    ->unique()
+                                    ->values();
+
+                                $varsRaw = (string) ($get('vars_json') ?? '{}');
+                                $vars = json_decode($varsRaw, true);
+                                if (!is_array($vars)) $vars = [];
+
+                                return
+                                    'Template: ' . self::DIFFUSION_TEMPLATE_SID . "\n" .
+                                    'From: ' . (string) env('TWILIO_WHATSAPP_FROM', '') . "\n" .
+                                    'Total destinatarios válidos: ' . $nums->count() . "\n\n" .
+                                    'Variables:' . "\n" . json_encode($vars, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n\n" .
+                                    'Destinatarios:' . "\n" . $nums->take(30)->implode("\n") .
+                                    ($nums->count() > 30 ? "\n... (+".($nums->count()-30)." más)" : '');
+                            }),
+                    ])
+                    ->modalSubmitActionLabel('Enviar difución')
+                    ->action(function (array $data) {
+                        // Validaciones env
+                        $sid = trim((string) env('TWILIO_ACCOUNT_SID', ''));
+                        $token = trim((string) env('TWILIO_AUTH_TOKEN', ''));
+                        $from = trim((string) env('TWILIO_WHATSAPP_FROM', ''));
+
+                        if ($sid === '' || $token === '' || $from === '') {
+                            Notification::make()
+                                ->title('Faltan variables en .env')
+                                ->body('Requiere: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM')
+                                ->danger()
+                                ->send();
+                            return;
+                        }
+
+                        // Parse números
+                        $raw = (string) ($data['numbers'] ?? '');
+                        $parts = preg_split("/\r\n|\n|\r|,|;/", $raw) ?: [];
+                        $numbers = collect($parts)
+                            ->map(fn ($n) => self::normalizeWhatsappPhone((string) $n))
+                            ->filter()
+                            ->unique()
+                            ->values();
+
+                        if ($numbers->isEmpty()) {
+                            Notification::make()
+                                ->title('No hay números válidos')
+                                ->danger()
+                                ->send();
+                            return;
+                        }
+
+                        // Variables
+                        $varsRaw = (string) ($data['vars_json'] ?? '{}');
+                        $vars = json_decode($varsRaw, true);
+                        if (!is_array($vars)) {
+                            Notification::make()
+                                ->title('JSON inválido en variables')
+                                ->body('Corrige el JSON. Ej: {"1":"BHK","2":"50% OFF"}')
+                                ->danger()
+                                ->send();
+                            return;
+                        }
+
+                        $statusCallback = trim((string) env('TWILIO_STATUS_CALLBACK_URL', ''));
+
+                        $twilio = new TwilioClient($sid, $token);
+
+                        $ok = 0;
+                        $fail = 0;
+                        $lines = [];
+
+                        foreach ($numbers as $to) {
+                            try {
+                                $payload = [
+                                    'from' => self::normalizeWhatsapp($from),
+                                    'contentSid' => self::DIFFUSION_TEMPLATE_SID,
+                                    'contentVariables' => json_encode($vars, JSON_UNESCAPED_UNICODE),
+                                ];
+
+                                if ($statusCallback !== '') {
+                                    $payload['statusCallback'] = $statusCallback;
+                                }
+
+                                $msg = $twilio->messages->create($to, $payload);
+
+                                $ok++;
+                                $lines[] = "✅ {$to} — {$msg->sid}";
+                            } catch (\Throwable $e) {
+                                $fail++;
+                                $lines[] = "❌ {$to} — " . $e->getMessage();
+                            }
+                        }
+
+                        Notification::make()
+                            ->title("Difución enviada: {$ok} OK / {$fail} fallos")
+                            ->body(implode("\n", array_slice($lines, 0, 15)) . (count($lines) > 15 ? "\n..." : ''))
+                            ->success()
+                            ->send();
+                    }),
+            ])
+
             ->actions([
                 Tables\Actions\ViewAction::make()
                     ->label('Ver conversación')
