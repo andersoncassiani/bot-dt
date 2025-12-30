@@ -76,6 +76,23 @@ return [
         'strict' => true,
         'engine' => null,
     ],
+
+    'clientes_mysql' => [
+    'driver' => 'mysql',
+    'url' => env('CLIENTES_DATABASE_URL'),
+    'host' => env('CLIENTES_DB_HOST', '127.0.0.1'),
+    'port' => env('CLIENTES_DB_PORT', '3306'),
+    'database' => env('CLIENTES_DB_DATABASE', 'dwijpjnv_bhk_clientes'),
+    'username' => env('CLIENTES_DB_USERNAME', 'dwijpjnv_bhk_clientes'),
+    'password' => env('CLIENTES_DB_PASSWORD', 'bhk_clientes'),
+    'charset' => 'utf8mb4',
+    'collation' => 'utf8mb4_unicode_ci',
+    'prefix' => '',
+    'prefix_indexes' => true,
+    'strict' => true,
+    'engine' => null,
+],
+
     
         'mariadb' => [
             'driver' => 'mariadb',
