@@ -24,6 +24,7 @@ class CheckHighPriorityTasks extends Command
         'edgardo'  => '573116123189',
         'dairo'    => '573007189383',
         'stiven'   => '573026444564',
+        'jhonatan' => '573005033093',
     ];
 
     public function handle(): int
